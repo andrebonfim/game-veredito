@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}GameVeredito | AI Game Analysis{% endblock %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center pt-10 pb-20 text-center space-y-8">
+
+  <div class="space-y-4 max-w-2xl">
+    <h1 class="text-4xl md:text-6xl font-bold tracking-tight text-white">
+      Should you buy it?
+    </h1>
+    <p class="text-lg text-gray-400">
+      AI-powered analysis of Steam reviews and real-time price comparison across all stores.
+      <span class="text-green-400 block mt-2 font-medium">Stop wasting money on bad ports.</span>
+    </p>
+  </div>
+
+  <div class="w-full max-w-xl relative group">
+    <div
+      class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-500 group-focus-within:text-green-500 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+    </div>
+
+    <input type="text" name="game_url"
+      class="block w-full pl-12 pr-4 py-4 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all shadow-lg"
+      placeholder="Paste Steam URL (e.g., store.steampowered.com/app/1091500/Cyberpunk_2077)" hx-post="/api/analyze"
+      hx-trigger="keyup delay:1200ms changed" hx-target="#result-area" hx-indicator="#loading-spinner">
+
+    <div id="loading-spinner" class="htmx-indicator absolute inset-y-0 right-0 pr-4 flex items-center">
+      <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-green-500"></div>
+    </div>
+  </div>
+
+  <div id="result-area" class="w-full max-w-3xl min-h-[100px] transition-all duration-300">
+  </div>
+
+</div>
+{% endblock %}
