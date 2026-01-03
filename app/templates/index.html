@@ -10,7 +10,7 @@
       Should you buy it?
     </h1>
     <p class="text-lg text-gray-400">
-      AI-powered analysis of Steam reviews and real-time price comparison across all stores.
+      AI-powered analysis of Steam reviews and real-time price comparison.
       <span class="text-green-400 block mt-2 font-medium">Stop wasting money on bad ports.</span>
     </p>
   </div>
@@ -26,12 +26,15 @@
 
     <input type="text" name="game_url"
       class="block w-full pl-12 pr-4 py-4 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all shadow-lg"
-      placeholder="Paste Steam URL (e.g., store.steampowered.com/app/1091500/Cyberpunk_2077)" hx-post="/api/analyze"
-      hx-trigger="keyup delay:1200ms changed" hx-target="#result-area" hx-indicator="#loading-spinner">
+      placeholder="Cole o link da Steam (ex: store.steampowered.com/app/1091500...)" hx-post="/api/analyze"
+      hx-trigger="keyup delay:1000ms changed" hx-target="#result-area" hx-indicator="#loading-indicator">
+  </div>
 
-    <div id="loading-spinner" class="htmx-indicator absolute inset-y-0 right-0 pr-4 flex items-center">
-      <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-green-500"></div>
-    </div>
+  <div id="loading-indicator" class="htmx-indicator flex flex-col items-center justify-center space-y-2 py-4">
+    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
+    <p class="text-green-400 text-sm animate-pulse font-medium">
+      🤖 A IA está lendo reviews, vendo imagens e consultando preços...
+    </p>
   </div>
 
   <div id="result-area" class="w-full max-w-3xl min-h-[100px] transition-all duration-300">

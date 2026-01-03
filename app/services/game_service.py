@@ -19,10 +19,10 @@ def extract_app_id(url: str):
     return match.group(1) if match else None
 
 
-def get_steam_price_brl(app_id: str):
+def get_steam_api_data(app_id: str):
     """
-    Fetches the official price in BRL (Reais) using Steam API.
-    Returns a formatted string (e.g., 'R$ 199,90') or status text in PT-BR.
+    Fetch Price (R$) and Cover Image from the Steam API.
+    Returns a dict: {'price': str, 'image': str}
     """
     try:
         # 'cc=br' forces the currency to Brazilian Real
@@ -33,31 +33,31 @@ def get_steam_price_brl(app_id: str):
 
         # Check if API response is valid and successful
         if not data or not data.get(app_id) or not data[app_id]["success"]:
-            return "Preço indisponível"
+            return {"price": "Preço indisponível", "image": ""}
 
         game_data = data[app_id]["data"]
 
-        # Handle Free to Play games
+        # 1. Fetch Image
+        image_url = game_data.get("header_image", "")
+
+        # 2. Fetch Price
+        price_text = "Não listado"
         if game_data.get("is_free"):
-            return "Gratuito (Free to Play)"
+            price_text = "Gratuito (Free to Play)"
+        elif game_data.get("price_overview"):
+            price_overview = game_data.get("price_overview")
+            final_price = price_overview.get("final_formatted")
+            discount = price_overview.get("discount_percent", 0)
+            if discount > 0:
+                price_text = f"{final_price} (-{discount}%)"
+            else:
+                price_text = final_price
 
-        price_overview = game_data.get("price_overview")
-        if not price_overview:
-            return "Não listado / Não lançado"
-
-        # Extract formatted price (e.g., "R$ 100,00")
-        final_price = price_overview.get("final_formatted")
-        discount = price_overview.get("discount_percent", 0)
-
-        # If there is a discount, format it for the AI/User
-        if discount > 0:
-            return f"{final_price} (Com {discount}% de desconto hoje!)"
-
-        return final_price
+        return {"price": price_text, "image": image_url}
 
     except Exception as e:
-        print(f"Error fetching price: {e}")
-        return "Erro ao consultar preço"
+        print(f"Error fetching API data: {e}")
+        return {"price": "Erro", "image": ""}
 
 
 def get_steam_text(url: str):
@@ -83,8 +83,7 @@ def get_steam_text(url: str):
 
         return game_title, raw_text
 
-    except Exception as e:
-        print(f"Error scraping Steam: {e}")
+    except Exception:
         return None, None
 
 
@@ -92,7 +91,7 @@ async def generate_game_analysis(game_url: str):
     """
     Main Orchestrator:
     1. Extract ID & Scrape Text
-    2. Fetch Price (BRL)
+    2. Fetch Price & Image (API)
     3. Generate Analysis with Gemini
     """
 
@@ -102,7 +101,7 @@ async def generate_game_analysis(game_url: str):
     # 2. Scrape Text Data
     title, game_text = get_steam_text(game_url)
 
-    # Validation: Return error HTML if scraping fails
+    # Validation
     if not game_text or not app_id:
         return """
         <div class="p-4 mb-4 text-sm text-red-400 bg-red-900/20 rounded-lg border border-red-900 animate-fade-in">
@@ -110,11 +109,12 @@ async def generate_game_analysis(game_url: str):
         </div>
         """
 
-    # 3. Fetch Price in BRL (More accurate than scraping)
-    price_brl = get_steam_price_brl(app_id)
+    # 3. Fetch Price & Image
+    api_data = get_steam_api_data(app_id)
+    price_brl = api_data["price"]
+    image_url = api_data["image"]
 
     # 4. Construct the Prompt
-    # The prompt is in Portuguese to ensure the AI output is in PT-BR.
     prompt = f"""
     Você é um crítico de games brasileiro, especialista em Custo-Benefício e Performance Técnica no PC.
     Analise o jogo "{title}".
@@ -134,7 +134,9 @@ async def generate_game_analysis(game_url: str):
     
     MODELO HTML:
     <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-2xl animate-fade-in-up">
-        <div class="bg-gray-900/50 p-6 border-b border-gray-700 flex justify-between items-center">
+        <img src="{image_url}" alt="{title}" class="w-full h-48 object-cover opacity-90">
+        
+        <div class="bg-gray-900/90 p-6 border-b border-gray-700 flex justify-between items-center relative z-10 -mt-2">
             <h2 class="text-2xl font-bold text-white">{title}</h2>
             <span class="px-3 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold uppercase tracking-wider rounded-full">
                 [VEREDITO]
@@ -143,8 +145,12 @@ async def generate_game_analysis(game_url: str):
         
         <div class="p-6 space-y-4 text-left">
             <div>
-                <h3 class="text-green-400 font-bold text-sm uppercase mb-1">Análise da IA</h3>
-                <p class="text-gray-300 leading-relaxed">
+                <div class="flex justify-between items-baseline mb-2">
+                     <h3 class="text-green-400 font-bold text-sm uppercase">Análise da IA</h3>
+                     <span class="text-gray-400 text-xs font-mono bg-gray-900 px-2 py-1 rounded border border-gray-700">{price_brl}</span>
+                </div>
+                
+                <p class="text-gray-300 leading-relaxed text-sm">
                     [Sua análise aqui. Cite explicitamente o preço e se vale a pena.]
                 </p>
             </div>

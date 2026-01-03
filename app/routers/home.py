@@ -20,10 +20,7 @@ async def home_page(request: Request):
 
 @router.post("/api/analyze", response_class=HTMLResponse)
 async def analyze_game_endpoint(request: Request, game_url: str = Form(...)):
-    """
-    HTMX Endpoint.
-    Receives the game URL, processes logic (mocked for now), and returns HTML snippet.
-    """
+    # HTMX Endpoint.
 
     # 1. Input Validation (Basic)
     if not game_url or "steampowered.com" not in game_url:
