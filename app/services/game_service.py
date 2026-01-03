@@ -2,12 +2,18 @@ import re
 
 import requests
 from bs4 import BeautifulSoup
+from cachetools import TTLCache
 from google import genai
 
 from app.core.config import settings
 
 # Instantiate Gemini Client
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+# --- CACHE CONFIGURATION (MEMORY) ---
+# maxsize=100: Stores the last 100 queried games
+# ttl=86400: Expires data after 24 hours (86400 seconds) to update prices
+game_cache = TTLCache(maxsize=100, ttl=86400)
 
 
 def extract_app_id(url: str):
@@ -60,9 +66,40 @@ def get_steam_api_data(app_id: str):
         return {"price": "Erro", "image": ""}
 
 
-def get_steam_text(url: str):
+def get_steam_reviews(app_id: str):
     """
-    Scrapes the Steam store page to get description and reviews summary.
+    NEW: Fetches the top 10 most useful reviews (Positive & Negative) from Steam API.
+    This gives the AI the 'real user opinion' regarding bugs and performance.
+    """
+    try:
+        # filter=summary: Gets the most relevant/useful
+        # language=all: Gets English and Portuguese (English usually has more tech analysis)
+        url = f"https://store.steampowered.com/appreviews/{app_id}?json=1&filter=summary&language=all&num_per_page=10&purchase_type=all"
+
+        response = requests.get(url, timeout=5)
+        data = response.json()
+
+        if not data or "reviews" not in data:
+            return "Não foi possível ler os reviews dos usuários."
+
+        reviews_list = []
+        for review in data["reviews"]:
+            # Clean text and limit length to avoid token overflow
+            text = review.get("review", "").replace("\n", " ")[:500]
+            votes = review.get("votes_up", 0)
+            reviews_list.append(f"- (👍 {votes} votos): {text}")
+
+        return "\n".join(reviews_list)
+
+    except Exception as e:
+        print(f"Error fetching reviews: {e}")
+        return "Erro ao buscar reviews."
+
+
+def get_steam_store_text(url: str):
+    """
+    Scrapes the Steam store page to get the DESCRIPTION (Marketing text).
+    Renamed from 'get_steam_text' to be more specific.
     """
     try:
         # Cookies to bypass Steam's age verification gate (Age Gate)
@@ -73,13 +110,16 @@ def get_steam_text(url: str):
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Extract game title
-        # UI Fallback: Returns "Jogo Desconhecido" (PT-BR) if not found
         game_title = soup.find("div", {"id": "appHubAppName"})
         game_title = game_title.text.strip() if game_title else "Jogo Desconhecido"
 
-        # Extract raw text from body (Description + Reviews snippets)
-        # Limit to 15k chars for token optimization
-        raw_text = soup.get_text(separator=" ", strip=True)[:15000]
+        # Refined: Try to get specific description div first
+        description = soup.find("div", {"id": "game_area_description"})
+        if description:
+            raw_text = description.get_text(separator=" ", strip=True)[:10000]
+        else:
+            # Fallback to whole body if description div is missing
+            raw_text = soup.get_text(separator=" ", strip=True)[:10000]
 
         return game_title, raw_text
 
@@ -90,39 +130,62 @@ def get_steam_text(url: str):
 async def generate_game_analysis(game_url: str):
     """
     Main Orchestrator:
-    1. Extract ID & Scrape Text
-    2. Fetch Price & Image (API)
-    3. Generate Analysis with Gemini
+    1. Check Cache
+    2. Extract ID & Scrape Store Text
+    3. Fetch Real Reviews (API)
+    4. Fetch Price & Image (API)
+    5. Generate Analysis with Gemini
+    6. Save to Cache
     """
 
     # 1. Extract ID
     app_id = extract_app_id(game_url)
 
-    # 2. Scrape Text Data
-    title, game_text = get_steam_text(game_url)
-
-    # Validation
-    if not game_text or not app_id:
+    if not app_id:
         return """
         <div class="p-4 mb-4 text-sm text-red-400 bg-red-900/20 rounded-lg border border-red-900 animate-fade-in">
-            <span class="font-bold">Erro de Leitura!</span> Link inválido ou erro ao acessar a Steam. Verifique a URL.
+            <span class="font-bold">Link Inválido!</span> Verifique a URL.
         </div>
         """
 
-    # 3. Fetch Price & Image
+    # CACHE CHECK
+    if app_id in game_cache:
+        print(f"⚡ CACHE HIT: Returning saved analysis for ID {app_id}")
+        return game_cache[app_id]
+
+    print(f"🔍 CACHE MISS: Analyzing {app_id} for the first time...")
+
+    # 2. Scrape Store Text (Marketing)
+    title, store_text = get_steam_store_text(game_url)
+
+    # Validation
+    if not store_text:
+        return """
+        <div class="p-4 mb-4 text-sm text-red-400 bg-red-900/20 rounded-lg border border-red-900 animate-fade-in">
+            <span class="font-bold">Erro de Leitura!</span> Não consegui acessar a página da Steam.
+        </div>
+        """
+
+    # 3. Fetch Real Reviews (The Truth)
+    user_reviews = get_steam_reviews(app_id)
+
+    # 4. Fetch Price & Image
     api_data = get_steam_api_data(app_id)
     price_brl = api_data["price"]
     image_url = api_data["image"]
 
-    # 4. Construct the Prompt
+    # 5. Construct the Prompt
     prompt = f"""
     Você é um crítico de games brasileiro, especialista em Custo-Benefício e Performance Técnica no PC.
     Analise o jogo "{title}".
     
     PREÇO ATUAL NO BRASIL: {price_brl}
     
-    DADOS DA STEAM (DESCRIÇÃO E REVIEWS):
-    {game_text}
+    O QUE A DESENVOLVEDORA DIZ (Marketing):
+    {store_text}
+    
+    O QUE OS JOGADORES DIZEM (Reviews Reais - Importante para detectar bugs/performance):
+    {user_reviews}
 
     Sua missão: Gere um HTML (apenas o conteúdo da div) seguindo EXATAMENTE a estrutura abaixo.
     
@@ -167,15 +230,22 @@ async def generate_game_analysis(game_url: str):
     </div>
     """
 
-    # 5. Call Gemini API
+    # 6. Call Gemini API
     try:
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
-        return response.text
+
+        html_result = response.text
+
+        # SAVE TO CACHE
+        game_cache[app_id] = html_result
+
+        return html_result
+
     except Exception as e:
-        print(f"Erro no Gemini 3: {e}. Tentando fallback...")
+        print(f"Error in Gemini: {e}. Trying fallback...")
         return f"""
         <div class="p-4 text-red-400 border border-red-900 rounded-lg">
             Erro ao conectar com a IA: {e}
