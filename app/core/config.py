@@ -9,7 +9,7 @@ class Settings(BaseSettings):
 
     # General Info
     PROJECT_NAME: str = "GameVeredito"
-    VERSION: str = "1.2.0"
+    VERSION: str = "1.3.0"
 
     # API Configuration
     # 'GEMINI_API_KEY' is required (no default value).

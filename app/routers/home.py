@@ -2,6 +2,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from app.core.limiter import limiter
 from app.services.game_service import generate_game_analysis
 
 router = APIRouter()
@@ -19,6 +20,7 @@ async def home_page(request: Request):
 
 
 @router.post("/api/analyze", response_class=HTMLResponse)
+@limiter.limit("5/minute")  # Rate limit: 5 requests per minute per IP
 async def analyze_game_endpoint(request: Request, game_url: str = Form(...)):
     # HTMX Endpoint.
 
@@ -31,6 +33,14 @@ async def analyze_game_endpoint(request: Request, game_url: str = Form(...)):
         """
 
     # 2. Call IA service to generate analysis
-    ai_html_response = await generate_game_analysis(game_url)
-
-    return ai_html_response
+    try:
+        # Await the async function from game_service
+        return await generate_game_analysis(game_url)
+    except Exception as e:
+        # Fallback if something breaks deep inside the service
+        return f"""
+        <div class="p-4 text-red-400 border border-red-900 rounded-lg animate-fade-in">
+            <span class="font-bold">Erro Interno:</span> {str(e)} <br>
+            Tente novamente em alguns instantes.
+        </div>
+        """
