@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}GameVeredito | AI Game Analysis{% endblock %}
+{% block title %}GameVeredito | Análise de Jogos com IA{% endblock %}
 
 {% block content %}
 
@@ -19,11 +19,11 @@
 
   <div class="space-y-4 max-w-2xl">
     <h1 class="text-4xl md:text-6xl font-bold tracking-tight text-white">
-      Should you buy it?
+      Vale a pena comprar?
     </h1>
     <p class="text-lg text-gray-400">
-      AI-powered analysis of Steam reviews and real-time price comparison.
-      <span class="text-green-400 block mt-2 font-medium">Stop wasting money on bad ports.</span>
+      Análise de reviews da Steam com IA e comparação de preços em tempo real.
+      <span class="text-green-400 block mt-2 font-medium">Pare de gastar dinheiro em jogos ruins.</span>
     </p>
   </div>
 
@@ -41,7 +41,7 @@
 
       <input type="text" name="game_url" id="search-input"
         class="block w-full pl-12 pr-10 py-4 bg-gray-800 border-2 border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-green-500 focus:ring-4 focus:ring-green-500/20 transition-all shadow-lg"
-        placeholder="Cole o link da Steam..." autocomplete="off" required>
+        placeholder="Cole o link do jogo na Steam..." autocomplete="off" required>
 
       <button type="button"
         onclick="document.getElementById('search-input').value = ''; document.getElementById('search-input').focus(); document.getElementById('result-area').innerHTML = '';"
@@ -68,7 +68,7 @@
   <div id="loading-indicator" class="htmx-indicator flex flex-col items-center justify-center space-y-2 py-6">
     <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
     <p class="text-green-400 text-sm animate-pulse font-medium">
-      🤖 A IA está lendo reviews, vendo imagens e consultando preços...
+      🤖 Analisando reviews, imagens e preços...
     </p>
   </div>
 

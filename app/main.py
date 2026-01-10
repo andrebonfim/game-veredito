@@ -1,8 +1,32 @@
+"""
+Main Application Module
+
+This is the entry point of the FastAPI application.
+It configures:
+- FastAPI app instance
+- Rate limiting (prevents API abuse)
+- Static files (CSS, images)
+- Route handlers
+
+ARCHITECTURE OVERVIEW:
+┌─────────────────────────────────────────────────────────────┐
+│                         main.py                              │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────────┐   │
+│  │   Limiter   │  │   Routers    │  │   Static Files    │   │
+│  └──────┬──────┘  └──────┬───────┘  └─────────┬─────────┘   │
+│         │                │                    │              │
+│         ▼                ▼                    ▼              │
+│  Rate Limiting      /api/analyze         /static/*          │
+│  5 req/min          Game Analysis        CSS, Images        │
+└─────────────────────────────────────────────────────────────┘
+"""
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
+from app.components.renderer import render_error_simple
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.routers import home
@@ -11,30 +35,33 @@ from app.routers import home
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="AI-powered Steam review analyzer and price tracker.",
+    description="Analisador de jogos da Steam com IA e comparador de preços.",
 )
 
 # Connect the Limiter to the App
+# This enables rate limiting across all routes
 app.state.limiter = limiter
 
 
-# Define a Custom Error Handler (Fixes the Typing Error)
-# Instead of using the default JSON handler, is defined a function
-# that returns HTML. This pleases both the Type Checker and HTMX.
 def custom_rate_limit_handler(request: Request, exc: Exception):
     """
-    This function runs automatically when a user exceeds the limit.
-    It returns a formatted HTML alert instead of a generic server error.
+    Custom handler for rate limit exceeded errors.
+
+    WHY CUSTOM HANDLER?
+    - Default SlowAPI returns JSON error, but we use HTMX
+    - HTMX expects HTML fragments
+    - This returns a styled error that matches our UI
+
+    WHEN IS THIS CALLED?
+    - When a user makes more than 5 requests per minute
+    - SlowAPI automatically triggers this handler
     """
-    return HTMLResponse(
-        content="""
-        <div class="p-4 mb-4 text-sm text-yellow-400 bg-yellow-900/20 rounded-lg border border-yellow-900 animate-pulse">
-            <span class="font-bold">Calma aí, apressadinho!</span> ✋<br>
-            Você fez muitas requisições. Espere um minuto e tente de novo.
-        </div>
-        """,
-        status_code=200,
+    html_content = render_error_simple(
+        error_type="rate_limit",
+        message="Calma aí! ✋ Você fez muitas requisições.",
+        details="Espere um minuto e tente novamente.",
     )
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 # Add the exception handler to the app

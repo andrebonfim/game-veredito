@@ -1,19 +1,50 @@
+"""
+Game Service Module
+
+This is the main "brain" of the application. It orchestrates:
+1. Fetching data from Steam (API + Web Scraping)
+2. Calling the Gemini AI for analysis
+3. Parsing AI response into structured JSON
+4. Caching results to save API calls
+
+KEY CHANGE IN THIS REFACTOR:
+- BEFORE: AI generated HTML directly (inconsistent design)
+- AFTER: AI returns JSON, we parse it, then render with fixed templates
+
+WHY JSON INSTEAD OF HTML?
+1. Consistency: The layout is always the same, defined by our templates
+2. Validation: We can check if the AI returned valid data
+3. Caching: JSON is smaller and easier to cache than HTML
+4. Flexibility: Same JSON can be rendered differently (web, mobile, etc.)
+"""
+
+import json
 import re
+from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 from cachetools import TTLCache
 from google import genai
+from pydantic import ValidationError
 
+from app.components.renderer import render_analysis_card, render_error_simple
 from app.core.config import settings
+from app.schemas.game import GameAnalysis, GameData
 
 # Instantiate Gemini Client
+# This creates the connection to Google's AI service
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 # --- CACHE CONFIGURATION (MEMORY) ---
 # maxsize=100: Stores the last 100 queried games
 # ttl=86400: Expires data after 24 hours (86400 seconds) to update prices
-game_cache = TTLCache(maxsize=100, ttl=86400)
+#
+# HOW CACHE WORKS:
+# - First request for a game: Fetch from Steam + AI, save to cache
+# - Second request for same game: Return cached data instantly
+# - After 24 hours: Cache expires, next request fetches fresh data
+game_cache: TTLCache[str, GameData] = TTLCache(maxsize=100, ttl=86400)
 
 
 def extract_app_id(url: str):
@@ -127,127 +158,212 @@ def get_steam_store_text(url: str):
         return None, None
 
 
-async def generate_game_analysis(game_url: str):
+def parse_ai_json_response(response_text: str) -> Optional[GameAnalysis]:
     """
-    Main Orchestrator:
-    1. Check Cache
-    2. Extract ID & Scrape Store Text
-    3. Fetch Real Reviews (API)
-    4. Fetch Price & Image (API)
-    5. Generate Analysis with Gemini
-    6. Save to Cache
+    Parses the AI response text into a GameAnalysis object.
+
+    WHY THIS FUNCTION EXISTS:
+    - The AI might return JSON with markdown code blocks (```json ... ```)
+    - The AI might return invalid JSON sometimes
+    - We need to handle these cases gracefully
+
+    STEPS:
+    1. Try to extract JSON from markdown code blocks
+    2. Parse the JSON string
+    3. Validate with Pydantic schema
+    4. Return None if anything fails
+    """
+    try:
+        # Remove markdown code blocks if present
+        # AI often returns: ```json\n{...}\n```
+        text = response_text.strip()
+
+        if text.startswith("```"):
+            # Find the actual JSON content between the code blocks
+            lines = text.split("\n")
+            # Remove first line (```json) and last line (```)
+            json_lines = []
+            in_json = False
+            for line in lines:
+                if line.startswith("```") and not in_json:
+                    in_json = True
+                    continue
+                elif line.startswith("```") and in_json:
+                    break
+                elif in_json:
+                    json_lines.append(line)
+            text = "\n".join(json_lines)
+
+        # Parse JSON string into Python dict
+        data = json.loads(text)
+
+        # Validate with Pydantic (this ensures all required fields exist)
+        analysis = GameAnalysis(**data)
+
+        return analysis
+
+    except json.JSONDecodeError as e:
+        print(f"JSON Parse Error: {e}")
+        print(f"Raw response: {response_text[:500]}...")
+        return None
+    except ValidationError as e:
+        print(f"Pydantic Validation Error: {e}")
+        return None
+
+
+def build_json_prompt(
+    title: str, price_brl: str, store_text: str, user_reviews: str
+) -> str:
+    """
+    Builds the prompt for the AI to generate a JSON analysis.
+
+    KEY CHANGES FROM OLD PROMPT:
+    - No more HTML template in the prompt
+    - AI returns structured JSON
+    - Same analysis quality, different output format
+
+    The prompt structure is kept similar to maintain analysis quality.
+    """
+    return f"""
+Você é um crítico de games brasileiro, especialista em Custo-Benefício e Performance Técnica no PC.
+Analise o jogo "{title}".
+
+PREÇO ATUAL NO BRASIL: {price_brl}
+
+O QUE A DESENVOLVEDORA DIZ (Marketing):
+{store_text}
+
+O QUE OS JOGADORES DIZEM (Reviews Reais - Importante para detectar bugs/performance):
+{user_reviews}
+
+INSTRUÇÕES:
+1. Analise o jogo considerando preço, qualidade e performance técnica.
+2. Escolha um veredito: "COMPRAR AGORA" (verde), "ESPERAR PROMOÇÃO" (amarelo), ou "FUGIR" (vermelho).
+3. Use o preço ({price_brl}) para decidir. Se for caro e tiver problemas técnicos, recomende esperar.
+4. Responda APENAS com JSON válido, sem markdown, sem explicações extras.
+
+FORMATO DE RESPOSTA (JSON):
+{{
+    "verdict": "COMPRAR AGORA" | "ESPERAR PROMOÇÃO" | "FUGIR",
+    "verdict_color": "green" | "yellow" | "red",
+    "analysis_text": "Sua análise detalhada aqui. Mencione o preço e se vale a pena. Mínimo 100 palavras.",
+    "positive_points": ["Ponto positivo 1", "Ponto positivo 2", "Ponto positivo 3"],
+    "negative_points": ["Ponto negativo 1", "Ponto negativo 2"],
+    "performance_notes": ["Nota sobre FPS/bugs", "Requisitos de hardware"]
+}}
+
+REGRAS DO JSON:
+- verdict: EXATAMENTE um dos três valores
+- verdict_color: "green" para COMPRAR, "yellow" para ESPERAR, "red" para FUGIR
+- analysis_text: Texto corrido, mínimo 100 palavras, em português brasileiro
+- positive_points: Lista de 1 a 5 strings
+- negative_points: Lista de 0 a 5 strings (pode ser vazia se o jogo for perfeito)
+- performance_notes: Lista de 1 a 3 strings sobre performance técnica
+
+Responda APENAS com o JSON, nada mais.
+"""
+
+
+async def generate_game_analysis(game_url: str) -> str:
+    """
+    Main Orchestrator Function.
+
+    This is the entry point called by the router. It:
+    1. Validates the URL and extracts the App ID
+    2. Checks if we have a cached result
+    3. Fetches data from Steam (scraping + API)
+    4. Calls Gemini AI for analysis
+    5. Parses the JSON response
+    6. Renders HTML using fixed templates
+    7. Caches the result for future requests
+
+    RETURNS:
+    - HTML string (rendered from templates, NOT from AI)
+
+    FLOW DIAGRAM:
+    URL → Extract ID → Check Cache → Fetch Steam Data → Call AI →
+    Parse JSON → Create GameData → Render HTML → Cache → Return
     """
 
-    # 1. Extract ID
+    # STEP 1: Extract App ID from URL
     app_id = extract_app_id(game_url)
 
     if not app_id:
-        return """
-        <div class="p-4 mb-4 text-sm text-red-400 bg-red-900/20 rounded-lg border border-red-900 animate-fade-in">
-            <span class="font-bold">Link Inválido!</span> Verifique a URL.
-        </div>
-        """
+        return render_error_simple(
+            error_type="invalid_url",
+            message="Link Inválido! Verifique se a URL é da loja Steam.",
+        )
 
-    # CACHE CHECK
+    # STEP 2: Check Cache
+    # If we already analyzed this game recently, return cached result
     if app_id in game_cache:
         print(f"⚡ CACHE HIT: Returning saved analysis for ID {app_id}")
-        return game_cache[app_id]
+        cached_data = game_cache[app_id]
+        # Mark as cached so the UI can show a cache badge
+        cached_data.cached = True
+        return render_analysis_card(cached_data)
 
     print(f"🔍 CACHE MISS: Analyzing {app_id} for the first time...")
 
-    # 2. Scrape Store Text (Marketing)
+    # STEP 3: Scrape Store Page (Marketing Text)
     title, store_text = get_steam_store_text(game_url)
 
-    # Validation
     if not store_text:
-        return """
-        <div class="p-4 mb-4 text-sm text-red-400 bg-red-900/20 rounded-lg border border-red-900 animate-fade-in">
-            <span class="font-bold">Erro de Leitura!</span> Não consegui acessar a página da Steam.
-        </div>
-        """
+        return render_error_simple(
+            error_type="steam_error",
+            message="Erro ao acessar a Steam!",
+            details="Não consegui ler a página do jogo. Tente novamente em alguns segundos.",
+        )
 
-    # 3. Fetch Real Reviews (The Truth)
+    # STEP 4: Fetch Additional Data from Steam API
     user_reviews = get_steam_reviews(app_id)
-
-    # 4. Fetch Price & Image
     api_data = get_steam_api_data(app_id)
     price_brl = api_data["price"]
     image_url = api_data["image"]
 
-    # 5. Construct the Prompt
-    prompt = f"""
-    Você é um crítico de games brasileiro, especialista em Custo-Benefício e Performance Técnica no PC.
-    Analise o jogo "{title}".
-    
-    PREÇO ATUAL NO BRASIL: {price_brl}
-    
-    O QUE A DESENVOLVEDORA DIZ (Marketing):
-    {store_text}
-    
-    O QUE OS JOGADORES DIZEM (Reviews Reais - Importante para detectar bugs/performance):
-    {user_reviews}
+    # STEP 5: Build Prompt and Call Gemini AI
+    prompt = build_json_prompt(title, price_brl, store_text, user_reviews)
 
-    Sua missão: Gere um HTML (apenas o conteúdo da div) seguindo EXATAMENTE a estrutura abaixo.
-    
-    Regras:
-    1. Veredito: Escolha um entre "ESPERAR PROMOÇÃO" (Amarelo), "FUGIR" (Vermelho), ou "COMPRAR AGORA" (Verde).
-    2. IMPORTANTE: Use o preço ({price_brl}) para decidir. Se for caro e tiver problemas técnicos, recomende esperar.
-    3. Analise a performance técnica e diversão.
-    4. Responda EM PORTUGUÊS DO BRASIL.
-    
-    MODELO HTML:
-    <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-2xl animate-fade-in-up">
-        <img src="{image_url}" alt="{title}" class="w-full h-48 object-cover opacity-90">
-        
-        <div class="bg-gray-900/90 p-6 border-b border-gray-700 flex justify-between items-center relative z-10 -mt-2">
-            <h2 class="text-2xl font-bold text-white">{title}</h2>
-            <span class="px-3 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold uppercase tracking-wider rounded-full">
-                [VEREDITO]
-            </span>
-        </div>
-        
-        <div class="p-6 space-y-4 text-left">
-            <div>
-                <div class="flex justify-between items-baseline mb-2">
-                     <h3 class="text-green-400 font-bold text-sm uppercase">Análise da IA</h3>
-                     <span class="text-gray-400 text-xs font-mono bg-gray-900 px-2 py-1 rounded border border-gray-700">{price_brl}</span>
-                </div>
-                
-                <p class="text-gray-300 leading-relaxed text-sm">
-                    [Sua análise aqui. Cite explicitamente o preço e se vale a pena.]
-                </p>
-            </div>
-            
-            <div class="mt-4 p-4 bg-gray-900 rounded-lg border border-gray-700">
-                <h4 class="text-white font-bold text-xs uppercase mb-2">Resumo</h4>
-                <ul class="list-disc list-inside text-gray-400 text-sm space-y-1">
-                    <li>[Ponto Positivo]</li>
-                    <li>[Ponto Negativo]</li>
-                    <li>[Performance / Hardware]</li>
-                </ul>
-            </div>
-        </div>
-    </div>
-    """
-
-    # 6. Call Gemini API
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
         )
 
-        html_result = response.text
+        raw_response = response.text
 
-        # SAVE TO CACHE
-        game_cache[app_id] = html_result
+        # STEP 6: Parse AI Response into Structured Data
+        analysis = parse_ai_json_response(raw_response)
 
-        return html_result
+        if analysis is None:
+            # AI returned invalid JSON, show error
+            return render_error_simple(
+                error_type="ai_error",
+                message="A IA retornou uma resposta inválida.",
+                details="Tente novamente. Se o erro persistir, o jogo pode ter informações muito complexas.",
+            )
+
+        # STEP 7: Create Complete GameData Object
+        game_data = GameData(
+            app_id=app_id,
+            title=title,
+            price=price_brl,
+            image_url=image_url,
+            steam_url=game_url,
+            analysis=analysis,
+            cached=False,
+        )
+
+        # STEP 8: Save to Cache (save GameData, not HTML)
+        game_cache[app_id] = game_data
+
+        # STEP 9: Render HTML using Fixed Template
+        return render_analysis_card(game_data)
 
     except Exception as e:
-        print(f"Error in Gemini: {e}. Trying fallback...")
-        return f"""
-        <div class="p-4 text-red-400 border border-red-900 rounded-lg">
-            Erro ao conectar com a IA: {e}
-        </div>
-        """
+        print(f"Error in Gemini: {e}")
+        return render_error_simple(
+            error_type="ai_error",
+            message="Erro ao conectar com a IA!",
+            details=f"Detalhes técnicos: {str(e)}",
+        )

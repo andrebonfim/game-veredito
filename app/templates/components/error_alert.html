@@ -1,0 +1,89 @@
+{#
+Error Alert Component
+
+Displays error messages in a consistent, styled format.
+Automatically fades out after 10 seconds using Alpine.js-like behavior
+(implemented with pure CSS animation).
+
+VARIABLES RECEIVED:
+- error.error_type: Type of error (invalid_url, steam_error, ai_error)
+- error.message: Human-readable message in Portuguese
+- error.details: Optional technical details
+#}
+
+{# Define styles based on error type #}
+{% set error_styles = {
+'invalid_url': {
+'bg': 'bg-red-900/20',
+'border': 'border-red-900',
+'text': 'text-red-400',
+'icon': '❌'
+},
+'steam_error': {
+'bg': 'bg-yellow-900/20',
+'border': 'border-yellow-900',
+'text': 'text-yellow-400',
+'icon': '⚠️'
+},
+'ai_error': {
+'bg': 'bg-yellow-900/20',
+'border': 'border-yellow-900',
+'text': 'text-yellow-400',
+'icon': '🤖'
+},
+'rate_limit': {
+'bg': 'bg-yellow-900/20',
+'border': 'border-yellow-900',
+'text': 'text-yellow-400',
+'icon': '✋'
+}
+} %}
+
+{% set s = error_styles.get(error.error_type, error_styles.steam_error) %}
+
+<div class="p-4 mb-4 text-sm {{ s.text }} {{ s.bg }} rounded-lg border {{ s.border }} animate-fade-in-out" role="alert">
+  <div class="flex items-start gap-3">
+    <span class="text-lg">{{ s.icon }}</span>
+    <div class="flex-1">
+      <p class="font-bold">{{ error.message }}</p>
+      {% if error.details %}
+      <p class="mt-1 text-xs opacity-75">{{ error.details }}</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{#
+CSS for auto-fade animation
+The error will fade out after 8 seconds and be removed from layout
+#}
+<style>
+  @keyframes fadeInOut {
+    0% {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+
+    10% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    80% {
+      opacity: 1;
+    }
+
+    100% {
+      opacity: 0;
+      height: 0;
+      padding: 0;
+      margin: 0;
+      border: none;
+      overflow: hidden;
+    }
+  }
+
+  .animate-fade-in-out {
+    animation: fadeInOut 10s ease-in-out forwards;
+  }
+</style>
