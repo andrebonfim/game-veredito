@@ -10,15 +10,21 @@ Comecei querendo uma coisa simples: colar uma URL da Steam e receber uma anális
 
 **FastAPI** foi a escolha óbvia assim que decidi fazer streaming. O texto da análise aparece na tela enquanto o Gemini ainda está gerando — palavra por palavra, como um chat. Isso exige SSE (Server-Sent Events) com resposta assíncrona de verdade. Django daria um trabalhão pra isso; no FastAPI é literalmente `StreamingResponse` e pronto.
 
+**Asyncio** é o que permite buscar dados da Steam, reviews e preço histórico ao mesmo tempo sem bloquear o servidor. As três chamadas rodam em paralelo com `asyncio.gather()` — sem isso, cada requisição esperaria as APIs em sequência e o tempo de resposta triplicaria.
+
 **HTMX** foi a decisão que mais me surpreendeu positivamente. Não escrevi uma linha de JavaScript. O formulário envia com `hx-post`, o resultado entra no DOM com `hx-swap`, a conexão SSE abre com `hx-ext="sse"`. O servidor manda fragmentos HTML prontos — sem API JSON, sem estado no cliente, sem bundle. Parece que você tá construindo uma SPA mas o código tem a simplicidade de um site estático.
 
 **Jinja2** fecha o ciclo: cada fragmento que o HTMX injeta (card de análise, skeleton de loading, bloco de veredito) é um template separado renderizado no servidor. Nada de framework de frontend, nada de build step.
+
+**BeautifulSoup4** pra scraping da página da Steam. A API oficial da Steam não expõe descrição nem texto da loja — então o app raspa o HTML direto, extrai a descrição do jogo e os preços da página como fallback quando a API não retorna `price_overview`. O BS4 faz isso com poucas linhas e é suficiente pro que precisa aqui.
+
+**Pydantic v2** valida a resposta JSON que o Gemini devolve. O modelo pode alucinar, mandar um campo errado ou mudar o formato — o Pydantic garante que o que chega bate com o schema esperado (`GameAnalysis`, `VerdictType`, `perf_bars`) antes de qualquer template renderizar. Se não bate, cai no tratamento de erro em vez de quebrar silenciosamente na UI.
 
 **CSS puro** — aqui eu deliberadamente não usei Tailwind. O visual tem efeitos que simplesmente não cabem em classes utilitárias: fundo com quatro camadas de `radial-gradient`, borda giratória no input animada com `@property` CSS, ruído SVG de textura, glow dinâmico nos vereditos. Tentar colocar isso em Tailwind seria uma bagunça de valores arbitrários. Fiz um design system com custom properties (`--accent`, `--glow`, `--radius-lg`) diretamente e ficou mais limpo assim.
 
 **Gemini com dois modelos:** o primário é o `gemini-3.1-flash-lite-preview` (mais rápido, latência menor pro streaming), com fallback automático pro `gemini-2.5-flash` em erros como 503 e 429. O prompt pede uma resposta em duas partes separadas por um marcador `---JSON---`: primeiro o texto da análise em português informal, depois um JSON estruturado com veredito, pontos e barras de performance. Assim o streaming mostra o texto naturalmente enquanto o JSON estruturado chega só no final.
 
-**SQLite** porque não precisa de mais. Cada análise é salva localmente e o cache em memória é aquecido no startup — sem refazer chamadas à Steam ou à IA pra jogos já analisados. Infraestrutura zero.
+**SQLite + SQLAlchemy** porque não precisa de mais. Cada análise é salva localmente e o cache em memória é aquecido no startup — sem refazer chamadas à Steam ou à IA pra jogos já analisados. O SQLAlchemy entra pra não escrever SQL na mão e facilitar uma eventual migração de banco se o projeto crescer. Infraestrutura zero.
 
 **SlowAPI** pra rate limiting (5 req/min por IP). Um detalhe que faz diferença: o retorno de limite excedido é HTML, não JSON — porque o HTMX espera fragmentos HTML e servir JSON numa interface assim não faz sentido.
 
