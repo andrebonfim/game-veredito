@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}{{ game.title }} · GameVeredito{% endblock %}
+
+{% block content %}
+
+<div style="max-width: 780px; margin: 40px auto 0;">
+  <a href="/" style="font-family:var(--mono); font-size:11px; letter-spacing:0.1em; text-transform:uppercase;
+     color:var(--text-faint); text-decoration:none; display:inline-flex; align-items:center; gap:6px; margin-bottom:24px;">
+    ← Analisar outro jogo
+  </a>
+
+  <div id="card-container">
+    {% if stale %}
+    <div hx-get="/api/reanalyze/{{ game.app_id }}"
+         hx-trigger="load"
+         hx-target="#card-container"
+         hx-swap="innerHTML">
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <p class="loading-label">Análise desatualizada · Buscando dados atuais...</p>
+      </div>
+    </div>
+    {% else %}
+    {% include "components/analysis_card.html" %}
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

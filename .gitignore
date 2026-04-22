@@ -1,5 +1,41 @@
+# Environment & secrets
+.env
+.env.*
+
+# Python
 .venv/
 __pycache__/
-.env
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Database
+*.db
+*.sqlite3
+
+# Tests & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project artifacts (não versionados)
+_notes/
 history/
-historico_completo.txt
+*.zip
+
+# Claude Code (uso local)
+.claude/
+CLAUDE.md

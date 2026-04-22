@@ -1,0 +1,85 @@
+{#
+  Streaming skeleton card — rendered immediately with Steam data.
+  Gemini analysis arrives progressively via SSE from /api/stream/{stream_id}.
+
+  SSE events expected:
+  - chunk  → appended to #analysis-text-{app_id} (beforeend)
+  - complete → OOB swaps for #art-chip-{app_id}, #verdict-area-{app_id}, #points-area-{app_id}
+  - error  → replaces #sse-error-{app_id}
+#}
+
+<article class="card reveal" id="card-{{ game.app_id }}">
+
+  <div class="hero-band">
+    <img
+      src="{{ game.image_url }}"
+      alt="{{ game.title }}"
+      style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0.85;"
+      loading="lazy"
+    />
+    <div style="position:absolute; inset:0; background:linear-gradient(to bottom, transparent 40%, rgba(7,9,12,0.65));"></div>
+    <div class="art-tag">STEAM · APP/{{ game.app_id }}</div>
+    <div class="art-chip" id="art-chip-{{ game.app_id }}"><span class="d" style="background:var(--accent); animation:pulse 1.8s ease-in-out infinite;"></span> analisando com IA...</div>
+  </div>
+
+  <div class="card-body">
+
+    <div class="title-row">
+      <div class="game-meta">
+        <div class="crumbs">STEAM · <b>APP/{{ game.app_id }}</b> · <a href="{{ game.steam_url }}" target="_blank" rel="noopener noreferrer">Ver na Steam ↗</a></div>
+        <h3 class="game-title">{{ game.title }}</h3>
+      </div>
+      <div class="price-block">
+        {% if game.discount > 0 and game.original_price %}
+        <div class="price-old">{{ game.original_price }}</div>
+        {% endif %}
+        <div class="price-now">{{ game.price }}</div>
+        {% if game.discount > 0 %}
+        <div class="price-disc">-{{ game.discount }}%</div>
+        {% endif %}
+        {% if game.lowest_price %}
+        <div class="price-low">↓ menor preço: <span>{{ game.lowest_price }}</span></div>
+        {% endif %}
+        {% if game.review_score is not none %}
+        <div class="review-score">★ <span>{{ game.review_score }}%</span> positivas</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Verdict placeholder — replaced by complete SSE event -->
+    <div id="verdict-area-{{ game.app_id }}" class="verdict wait" style="opacity:0.45;">
+      <span class="ico">◷</span>
+      <span class="label-pre">Veredito ·</span>
+      <span>analisando...</span>
+    </div>
+
+    <!-- SSE container: text streams here -->
+    <div id="sse-{{ stream_id }}" hx-ext="sse" sse-connect="/api/stream/{{ stream_id }}">
+      <p class="analysis stream-text" id="analysis-text-{{ game.app_id }}"
+         sse-swap="chunk" hx-swap="beforeend"></p>
+
+      <!-- complete event target: OOB swaps update verdict + points; this element disappears -->
+      <div id="sse-complete-{{ game.app_id }}" sse-swap="complete" hx-swap="outerHTML"></div>
+
+      <!-- error event target -->
+      <div id="sse-error-{{ game.app_id }}" sse-swap="error" hx-swap="innerHTML"></div>
+    </div>
+
+    <!-- Points/perf placeholder — replaced by complete SSE event -->
+    <div id="points-area-{{ game.app_id }}">
+      <div class="skeleton-block">
+        <div class="skeleton-line" style="width:55%"></div>
+        <div class="skeleton-line" style="width:75%"></div>
+        <div class="skeleton-line" style="width:40%"></div>
+        <div class="skeleton-line" style="width:65%; margin-top:14px;"></div>
+        <div class="skeleton-line" style="width:50%"></div>
+      </div>
+    </div>
+
+    <div class="card-foot">
+      <span>◇ <b>GameVeredito</b> · análise automática via IA</span>
+      <a href="{{ game.steam_url }}" target="_blank" rel="noopener noreferrer" class="link">Ver na Steam →</a>
+    </div>
+
+  </div>
+</article>

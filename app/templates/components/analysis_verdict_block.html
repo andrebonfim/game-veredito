@@ -1,0 +1,66 @@
+{#
+  Sent as SSE "complete" event data.
+  - Main swap  (outerHTML on #sse-complete-{app_id}): empty div, removes the trigger element
+  - OOB swap 1 (outerHTML on #art-chip-{app_id}):     status chip → "análise concluída"
+  - OOB swap 2 (outerHTML on #verdict-area-{app_id}): verdict pill
+  - OOB swap 3 (outerHTML on #points-area-{app_id}):  pros / cons / perf_bars
+#}
+
+{% set vmap = {
+  'green':  {'cls': 'buy',  'ico': '✓'},
+  'yellow': {'cls': 'wait', 'ico': '◷'},
+  'red':    {'cls': 'flee', 'ico': '✕'}
+} %}
+{% set v = vmap.get(game.analysis.verdict_color, vmap['yellow']) %}
+
+<div></div>
+
+<div hx-swap-oob="outerHTML:#art-chip-{{ app_id }}">
+  <div class="art-chip"><span class="d"></span> análise concluída</div>
+</div>
+
+<div hx-swap-oob="outerHTML:#verdict-area-{{ app_id }}">
+  <div class="verdict {{ v.cls }}">
+    <span class="ico">{{ v.ico }}</span>
+    <span class="label-pre">Veredito ·</span>
+    <span>{{ game.analysis.verdict }}</span>
+  </div>
+</div>
+
+<div hx-swap-oob="outerHTML:#points-area-{{ app_id }}">
+  {% if game.analysis.positive_points or game.analysis.negative_points %}
+  <div class="ptcons"{% if not game.analysis.positive_points or not game.analysis.negative_points %} style="grid-template-columns: 1fr;"{% endif %}>
+    {% if game.analysis.positive_points %}
+    <div class="col pros">
+      <h4><span class="i-sq" style="background:linear-gradient(135deg,#86efac,#10b981)"></span> Pontos positivos</h4>
+      <ul>{% for p in game.analysis.positive_points %}<li>{{ p }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if game.analysis.negative_points %}
+    <div class="col cons">
+      <h4><span class="i-sq" style="background:linear-gradient(135deg,#fca5a5,#ef4444)"></span> Pontos negativos</h4>
+      <ul>{% for p in game.analysis.negative_points %}<li>{{ p }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if game.analysis.perf_bars %}
+  <div class="perf">
+    <div class="perf-head"><h4>◈ Desempenho técnico</h4></div>
+    <div class="perf-bars">
+      {% for bar in game.analysis.perf_bars %}
+      <div class="perf-bar-row">
+        <div class="perf-bar-header">
+          <span class="perf-bar-lbl">{{ bar.lbl }}</span>
+          <span class="perf-bar-val {{ bar.cls }}">{{ bar.v }}%</span>
+        </div>
+        <div class="perf-bar-track">
+          <div class="perf-bar-fill {{ bar.cls }}" style="width:{{ bar.v }}%"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>

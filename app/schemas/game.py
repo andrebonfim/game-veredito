@@ -1,83 +1,64 @@
-"""
-Game Analysis Schema
-
-This module defines the EXACT structure that the AI (Gemini) must return.
-By using Pydantic, we ensure that:
-1. The data is always validated
-2. The structure is always consistent
-3. We get automatic error handling if the AI returns invalid data
-
-HOW IT WORKS:
-- Pydantic is a library that validates data using Python type hints
-- When we create a GameAnalysis object, Pydantic checks if all fields are correct
-- If something is wrong, it raises a clear error
-
-EXAMPLE OF VALID JSON FROM AI:
-{
-    "verdict": "COMPRAR AGORA",
-    "verdict_color": "green",
-    "analysis_text": "Este jogo é excelente...",
-    "positive_points": ["Gráficos incríveis", "Gameplay fluido"],
-    "negative_points": ["Preço alto"],
-    "performance_notes": ["Roda bem em GTX 1060", "Requer 16GB RAM"]
-}
-"""
-
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, field_validator
+
+
+_CLS_ALIASES: dict[str, str] = {
+    "g": "g", "green": "g", "verde": "g",
+    "y": "y", "yellow": "y", "amarelo": "y",
+    "r": "r", "red": "r", "vermelho": "r",
+}
+
+
+class PerformanceBar(BaseModel):
+    lbl: str = Field(..., description="Short label, e.g. 'Estabilidade'")
+    v: int = Field(..., description="Score 0–100")
+    cls: str = Field(..., description="Color class: g=green, y=yellow, r=red")
+
+    @field_validator("v", mode="before")
+    @classmethod
+    def clamp_v(cls, val: int) -> int:
+        return max(0, min(100, int(val)))
+
+    @field_validator("cls", mode="before")
+    @classmethod
+    def normalize_cls(cls, val: str) -> str:
+        return _CLS_ALIASES.get(str(val).lower(), "y")
 
 
 class VerdictType(str, Enum):
-    """
-    Enum for the three possible verdicts.
-
-    WHY USE ENUM?
-    - Limits the AI to only these 3 options
-    - Prevents typos like "COMPRA AGORA" instead of "COMPRAR AGORA"
-    - Makes the code more predictable
-    """
-
     BUY_NOW = "COMPRAR AGORA"
     WAIT_SALE = "ESPERAR PROMOÇÃO"
     AVOID = "FUGIR"
 
 
+_VERDICT_TO_COLOR: dict[VerdictType, str] = {
+    VerdictType.BUY_NOW: "green",
+    VerdictType.WAIT_SALE: "yellow",
+    VerdictType.AVOID: "red",
+}
+
+
 class GameAnalysis(BaseModel):
-    """
-    Main schema for AI analysis response.
-
-    FIELD EXPLANATIONS:
-    - verdict: The final recommendation (BUY, WAIT, or AVOID)
-    - verdict_color: CSS color class (green, yellow, red)
-    - analysis_text: The main analysis paragraph from AI
-    - positive_points: List of good things about the game
-    - negative_points: List of bad things about the game
-    - performance_notes: Technical info (FPS, hardware requirements, bugs)
-    """
-
     verdict: VerdictType = Field(
-        ...,  # "..." means this field is REQUIRED
+        ...,
         description="The final recommendation: COMPRAR AGORA, ESPERAR PROMOÇÃO, or FUGIR",
-    )
-
-    verdict_color: str = Field(
-        ..., description="Color for the verdict badge: 'green', 'yellow', or 'red'"
     )
 
     analysis_text: str = Field(
         ...,
-        min_length=50,  # Ensures AI writes at least 50 characters
+        min_length=100,
         max_length=2000,
         description="Main analysis paragraph explaining the verdict",
     )
 
     positive_points: list[str] = Field(
-        default_factory=list,  # If AI forgets, defaults to empty list
+        ...,
         min_length=1,
         max_length=5,
-        description="List of positive aspects (1-5 items)",
+        description="List of positive aspects (required, 1-5 items)",
     )
 
     negative_points: list[str] = Field(
@@ -86,56 +67,54 @@ class GameAnalysis(BaseModel):
         description="List of negative aspects (0-5 items)",
     )
 
-    performance_notes: list[str] = Field(
+    perf_bars: list[PerformanceBar] = Field(
         default_factory=list,
-        max_length=3,
-        description="Technical performance notes (FPS, hardware, bugs)",
+        max_length=4,
+        description="Performance bars with label, score 0-100, and color class",
     )
+
+    @computed_field
+    @property
+    def verdict_color(self) -> str:
+        """Derived from verdict — always consistent, never supplied by the AI."""
+        return _VERDICT_TO_COLOR[self.verdict]
 
 
 class GameData(BaseModel):
-    """
-    Complete game data including Steam info + AI analysis.
-
-    This combines:
-    - Data from Steam API (title, price, image)
-    - Data from AI analysis (verdict, points, etc.)
-
-    WHY SEPARATE FROM GameAnalysis?
-    - GameAnalysis is what the AI returns
-    - GameData is the COMPLETE package we use to render the card
-    """
-
-    # Steam Data (fetched from API, not from AI)
     app_id: str
     title: str
     price: str
+    discount: int = Field(default=0, description="Discount percentage, e.g. 50 for -50%")
+    original_price: Optional[str] = Field(default=None, description="Full price before discount, e.g. 'R$ 199,90'")
+    lowest_price: Optional[str] = Field(default=None, description="All-time low price from ITAD, e.g. 'R$ 19,99'")
     image_url: str
     steam_url: str
-
-    # AI Analysis (parsed from Gemini response)
+    review_score: Optional[int] = Field(default=None, description="Percentage of positive reviews, e.g. 78")
     analysis: GameAnalysis
+    cached: bool = Field(default=False)
+    analyzed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # Metadata
-    cached: bool = Field(
-        default=False, description="Whether this result came from cache"
-    )
+    @field_validator("analyzed_at", mode="before")
+    @classmethod
+    def ensure_utc(cls, v: object) -> datetime:
+        if isinstance(v, datetime):
+            return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v.astimezone(timezone.utc)
+        return v
+
+
+class StreamingAnalysisJSON(BaseModel):
+    """Structured fields returned after the separator in the streaming prompt.
+    analysis_text is absent — it comes from the streamed text portion."""
+
+    verdict: VerdictType
+    positive_points: list[str] = Field(..., min_length=1, max_length=5)
+    negative_points: list[str] = Field(default_factory=list, max_length=5)
+    perf_bars: list[PerformanceBar] = Field(default_factory=list, max_length=4)
 
 
 class ErrorResponse(BaseModel):
-    """
-    Schema for error messages.
-
-    Used when something goes wrong (invalid URL, API error, etc.)
-    This ensures even errors have a consistent structure.
-    """
-
     error_type: str = Field(
-        ..., description="Type of error: 'invalid_url', 'steam_error', 'ai_error'"
+        ..., description="Type of error: 'invalid_url', 'steam_error', 'ai_error', 'rate_limit'"
     )
-
     message: str = Field(..., description="Human-readable error message in Portuguese")
-
-    details: Optional[str] = Field(
-        default=None, description="Technical details for debugging (optional)"
-    )
+    details: Optional[str] = Field(default=None)

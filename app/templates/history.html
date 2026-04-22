@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Histórico · GameVeredito{% endblock %}
+
+{% block content %}
+
+{% set vmap = {
+  'green':  'buy',
+  'yellow': 'wait',
+  'red':    'flee'
+} %}
+
+{% set vlabel = {
+  'green':  'COMPRAR',
+  'yellow': 'AGUARDAR',
+  'red':    'FUGIR'
+} %}
+
+<div class="history-wrap">
+
+  <div style="margin-bottom: 28px;">
+    <h2 style="font-size:22px; font-weight:800; letter-spacing:-0.025em; margin:0 0 4px;">Histórico de análises</h2>
+    <p style="font-family:var(--mono); font-size:11px; color:var(--text-faint); letter-spacing:0.08em; margin:0;">
+      {{ history|length }} jogo{% if history|length != 1 %}s{% endif %} · sessão atual
+    </p>
+  </div>
+
+  {% if history %}
+
+  <div class="history-header">
+    <span></span>
+    <span>Jogo</span>
+    <span>Veredito</span>
+    <span>Preço</span>
+    <span>Hora</span>
+  </div>
+
+  <div style="display:flex; flex-direction:column; gap:2px;">
+    {% for item in history %}
+    <a class="history-row" href="/app/{{ item.app_id }}">
+      <img class="history-thumb" src="{{ item.image_url }}" alt="{{ item.title }}" loading="lazy" />
+      <span class="history-title">{{ item.title }}</span>
+      <span class="v-pill {{ vmap.get(item.verdict_color, 'wait') }}">
+        {{ vlabel.get(item.verdict_color, item.verdict) }}
+      </span>
+      <span class="history-price">{{ item.price }}</span>
+      <span class="history-date">{{ item.analyzed_at }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% else %}
+
+  <div class="history-empty">
+    Nenhuma análise nesta sessão ainda.<br/>
+    <a href="/" style="color:var(--accent); text-decoration:none;">Analisar um jogo →</a>
+  </div>
+
+  {% endif %}
+
+</div>
+
+{% endblock %}
