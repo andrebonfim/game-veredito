@@ -67,6 +67,16 @@ class GameAnalysis(BaseModel):
         description="List of negative aspects (0-5 items)",
     )
 
+    perf_grade: Optional[str] = Field(
+        default=None,
+        description="Overall performance grade: 'Excelente', 'Aceitável', or 'Problemático'",
+    )
+
+    perf_notes: Optional[str] = Field(
+        default=None,
+        description="Descriptive text summarising performance, shown above the bars",
+    )
+
     perf_bars: list[PerformanceBar] = Field(
         default_factory=list,
         max_length=4,
@@ -109,6 +119,8 @@ class StreamingAnalysisJSON(BaseModel):
     verdict: VerdictType
     positive_points: list[str] = Field(..., min_length=1, max_length=5)
     negative_points: list[str] = Field(default_factory=list, max_length=5)
+    perf_grade: Optional[str] = None
+    perf_notes: Optional[str] = None
     perf_bars: list[PerformanceBar] = Field(default_factory=list, max_length=4)
 
 

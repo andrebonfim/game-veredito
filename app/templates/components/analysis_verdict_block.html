@@ -47,17 +47,22 @@
 
   {% if game.analysis.perf_bars %}
   <div class="perf">
-    <div class="perf-head"><h4>◈ Desempenho técnico</h4></div>
+    <div class="perf-head">
+      <h4>◈ NOTAS DE DESEMPENHO</h4>
+      {% if game.analysis.perf_grade %}
+      {% set grade_cls = {'Excelente': 'good', 'Aceitável': 'mid', 'Problemático': 'bad'} %}
+      <span class="perf-grade {{ grade_cls.get(game.analysis.perf_grade, 'mid') }}">{{ game.analysis.perf_grade }}</span>
+      {% endif %}
+    </div>
+    {% if game.analysis.perf_notes %}
+    <p>{{ game.analysis.perf_notes }}</p>
+    {% endif %}
     <div class="perf-bars">
       {% for bar in game.analysis.perf_bars %}
-      <div class="perf-bar-row">
-        <div class="perf-bar-header">
-          <span class="perf-bar-lbl">{{ bar.lbl }}</span>
-          <span class="perf-bar-val {{ bar.cls }}">{{ bar.v }}%</span>
-        </div>
-        <div class="perf-bar-track">
-          <div class="perf-bar-fill {{ bar.cls }}" style="width:{{ bar.v }}%"></div>
-        </div>
+      <div class="pb">
+        <div class="lbl">{{ bar.lbl }}</div>
+        <div class="bar"><div class="fill {{ bar.cls }}" style="width:{{ bar.v }}%"></div></div>
+        <div class="val">{{ bar.v }}<span style="color:var(--text-faint); font-family:var(--mono); font-weight:500;">/100</span></div>
       </div>
       {% endfor %}
     </div>

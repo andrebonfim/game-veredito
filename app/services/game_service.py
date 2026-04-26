@@ -289,9 +289,12 @@ PARTE 1 — SUA ANÁLISE (texto puro, mínimo 100 palavras, sem markdown, sem li
     "verdict": "COMPRAR AGORA" | "ESPERAR PROMOÇÃO" | "FUGIR",
     "positive_points": ["ponto positivo 1", "ponto positivo 2"],
     "negative_points": ["ponto negativo 1"],
+    "perf_grade": "Excelente" | "Aceitável" | "Problemático",
+    "perf_notes": "Resumo curto sobre o desempenho técnico geral do jogo.",
     "perf_bars": [
         {{"lbl": "Estabilidade", "v": 76, "cls": "y"}},
-        {{"lbl": "Performance", "v": 85, "cls": "g"}}
+        {{"lbl": "Performance", "v": 85, "cls": "g"}},
+        {{"lbl": "Otimização GPU", "v": 70, "cls": "g"}}
     ]
 }}
 
@@ -300,7 +303,9 @@ REGRAS:
 - verdict: EXATAMENTE um dos três valores acima
 - positive_points: 1 a 5 itens (obrigatório)
 - negative_points: 0 a 5 itens
-- perf_bars: 1 a 4 itens (obrigatório), cls: "g" (>=70), "y" (40-69), "r" (<40)
+- perf_grade: EXATAMENTE um dos três valores: "Excelente", "Aceitável" ou "Problemático" (obrigatório)
+- perf_notes: 1-2 frases resumindo o desempenho técnico baseado nos reviews (obrigatório)
+- perf_bars: EXATAMENTE 3 itens — "Estabilidade", "Performance" e "Otimização GPU" (obrigatório), cls: "g" (>=70), "y" (40-69), "r" (<40)
 - Nada antes da análise, nada depois do JSON
 """
 
@@ -318,6 +323,8 @@ def _parse_streaming_response(json_text: str, analysis_text: str) -> Optional[Ga
             analysis_text=analysis_text.strip() or "Análise gerada.",
             positive_points=structured.positive_points,
             negative_points=structured.negative_points,
+            perf_grade=structured.perf_grade,
+            perf_notes=structured.perf_notes,
             perf_bars=structured.perf_bars,
         )
     except Exception as e:
