@@ -20,6 +20,7 @@ class Analysis(Base):
 
     app_id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
+    sub = Column(String, nullable=True)
     price = Column(String)
     discount = Column(Integer, default=0)
     original_price = Column(String, nullable=True)
@@ -33,6 +34,15 @@ class Analysis(Base):
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    # Migrate: add 'sub' column if the DB was created before this field existed
+    with engine.connect() as conn:
+        cols = [row[1] for row in conn.execute(
+            __import__("sqlalchemy").text("PRAGMA table_info(analyses)")
+        )]
+        if "sub" not in cols:
+            conn.execute(__import__("sqlalchemy").text("ALTER TABLE analyses ADD COLUMN sub TEXT"))
+            conn.commit()
+            log.info("Migrated: added 'sub' column to analyses table")
     log.info("Database ready at %s", DB_PATH)
 
 
@@ -41,6 +51,7 @@ def save_analysis(game_data) -> None:
         row = Analysis(
             app_id=game_data.app_id,
             title=game_data.title,
+            sub=game_data.sub,
             price=game_data.price,
             discount=game_data.discount,
             original_price=game_data.original_price,
@@ -64,6 +75,7 @@ def _row_to_game_data(row: Analysis):
     return GameData(
         app_id=row.app_id,
         title=row.title,
+        sub=row.sub,
         price=row.price,
         discount=row.discount or 0,
         original_price=row.original_price,

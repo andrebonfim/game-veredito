@@ -51,6 +51,9 @@
       <div class="game-meta">
         <div class="crumbs">STEAM · <b>APP/{{ game.app_id }}</b> · <a href="{{ game.steam_url }}" target="_blank" rel="noopener noreferrer">Ver na Steam ↗</a></div>
         <h3 class="game-title">{{ game.title }}</h3>
+        {% if game.sub %}
+        <div class="game-sub">{{ game.sub }}</div>
+        {% endif %}
       </div>
       <div class="price-block">
         {% if game.discount > 0 and game.original_price %}

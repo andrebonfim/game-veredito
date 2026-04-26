@@ -33,6 +33,15 @@ _itad_id_cache: dict[str, str] = {}
 # Entry is popped when the SSE generator starts — prevents replay on reconnect.
 _pending_streams: dict[str, dict] = {}
 
+# Stream IDs that have already been consumed (success or terminal error). The
+# browser's EventSource auto-reconnects when the server closes the stream; on
+# reconnect the endpoint returns HTTP 204 to permanently stop further retries.
+_consumed_streams: TTLCache[str, bool] = TTLCache(maxsize=1024, ttl=300)
+
+
+def is_stream_consumed(stream_id: str) -> bool:
+    return stream_id in _consumed_streams
+
 
 def get_history() -> list:
     """Returns all persisted analyses sorted newest-first."""
@@ -46,7 +55,7 @@ def extract_app_id(url: str) -> Optional[str]:
 
 
 def get_steam_api_data(app_id: str) -> dict:
-    """Returns {"price": str, "image": str, "discount": int}."""
+    """Returns {"price": str, "image": str, "discount": int, "sub": str|None}."""
     try:
         url = f"https://store.steampowered.com/api/appdetails?appids={app_id}&cc=br&l=brazilian"
         response = requests.get(url, timeout=5)
@@ -54,7 +63,7 @@ def get_steam_api_data(app_id: str) -> dict:
         data = response.json()
 
         if not data or not data.get(app_id) or not data[app_id]["success"]:
-            return {"price": "Preço indisponível", "image": "", "discount": 0}
+            return {"price": "Preço indisponível", "image": "", "discount": 0, "sub": None}
 
         game_data = data[app_id]["data"]
         image_url = game_data.get("header_image", "")
@@ -71,11 +80,36 @@ def get_steam_api_data(app_id: str) -> dict:
             if discount > 0:
                 original_price = price_overview.get("initial_formatted")
 
-        return {"price": price_text, "image": image_url, "discount": discount, "original_price": original_price}
+        # Build subtitle: genres + mode tags by stable numeric ID (locale-independent)
+        _MODE_IDS = {
+            1:  "Multijogador",
+            2:  "Um Jogador",
+            9:  "Co-op",
+            20: "MMO",
+            27: "Multijogador",
+            38: "PvP Online",
+            49: "PvP",
+        }
+        genres = [g["description"] for g in game_data.get("genres", [])]
+        mode_tags = [
+            _MODE_IDS[c["id"]]
+            for c in game_data.get("categories", [])
+            if c.get("id") in _MODE_IDS and _MODE_IDS[c["id"]] not in genres
+        ]
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        sub_parts: list[str] = []
+        for part in genres + mode_tags:
+            if part not in seen:
+                seen.add(part)
+                sub_parts.append(part)
+        sub = " · ".join(sub_parts[:5]) if sub_parts else None
+
+        return {"price": price_text, "image": image_url, "discount": discount, "original_price": original_price, "sub": sub}
 
     except Exception as e:
         log.warning("Steam API request failed for app_id=%s: %s", app_id, e)
-        return {"price": "Erro", "image": "", "discount": 0}
+        return {"price": "Erro", "image": "", "discount": 0, "sub": None}
 
 
 def _fmt_brl(amount: float) -> str:
@@ -358,6 +392,7 @@ async def prepare_analysis_stream(game_url: str) -> tuple[str, str] | str:
     image_url: str = api_data["image"]
     discount: int = api_data["discount"]
     original_price: Optional[str] = api_data["original_price"]
+    sub: Optional[str] = api_data["sub"]
 
     prompt = build_streaming_prompt(title, price_brl, store_text, user_reviews, lowest_price, review_score)
     stream_id = uuid4().hex
@@ -365,6 +400,7 @@ async def prepare_analysis_stream(game_url: str) -> tuple[str, str] | str:
     _pending_streams[stream_id] = {
         "app_id": app_id,
         "title": title,
+        "sub": sub,
         "steam_url": game_url,
         "price_brl": price_brl,
         "image_url": image_url,
@@ -378,6 +414,7 @@ async def prepare_analysis_stream(game_url: str) -> tuple[str, str] | str:
     partial = {
         "app_id": app_id,
         "title": title,
+        "sub": sub,
         "price": price_brl,
         "discount": discount,
         "original_price": original_price,
@@ -392,104 +429,122 @@ async def prepare_analysis_stream(game_url: str) -> tuple[str, str] | str:
 
 
 async def stream_game_analysis(stream_id: str) -> AsyncGenerator[str, None]:
-    """Phase 2 SSE generator. Yields SSE event strings."""
-    data = _pending_streams.pop(stream_id, None)
-    if not data:
-        yield "event: error\ndata: Stream expirado ou não encontrado.\n\n"
+    """Phase 2 SSE generator. Yields SSE event strings.
+
+    On exit (success or error) the stream_id is marked consumed so that the
+    endpoint can answer EventSource auto-reconnects with HTTP 204.
+    """
+    # Guard against EventSource auto-reconnect firing a second concurrent request
+    # for the same stream_id before the first has finished. Don't mark consumed
+    # in this branch — the original in-flight stream is still running.
+    data = _pending_streams.get(stream_id)
+    if data and data.get("_claimed"):
+        yield "event: error\ndata: Stream já está em execução.\n\n"
         return
 
-    analysis_parts: list[str] = []
-    state = {"json_raw": ""}
-
-    async def _run_stream(model: str) -> AsyncGenerator[str, None]:
-        """Inner generator: streams one model, yields SSE chunk events, populates state."""
-        pre_buf = ""
-        sep_found = False
-        jbuf = ""
-
-        try:
-            async for chunk in await client.aio.models.generate_content_stream(
-                model=model, contents=data["prompt"]
-            ):
-                text = chunk.text or ""
-                if sep_found:
-                    jbuf += text
-                else:
-                    pre_buf += text
-                    if _STREAM_SEPARATOR in pre_buf:
-                        idx = pre_buf.index(_STREAM_SEPARATOR)
-                        remaining = pre_buf[:idx]
-                        jbuf = pre_buf[idx + _SEP_LEN:]
-                        sep_found = True
-                        if remaining:
-                            analysis_parts.append(remaining)
-                            yield f"event: chunk\ndata: {html_mod.escape(remaining)}\n\n"
-                    else:
-                        safe_end = max(0, len(pre_buf) - (_SEP_LEN - 1))
-                        if safe_end > 0:
-                            safe = pre_buf[:safe_end]
-                            pre_buf = pre_buf[safe_end:]
-                            analysis_parts.append(safe)
-                            yield f"event: chunk\ndata: {html_mod.escape(safe)}\n\n"
-        finally:
-            if not sep_found and pre_buf:
-                analysis_parts.append(pre_buf)
-                yield f"event: chunk\ndata: {html_mod.escape(pre_buf)}\n\n"
-            state["json_raw"] = jbuf
-
-    # Try primary model; fall back on retryable errors before any text is sent
     try:
-        async for event in _run_stream(_PRIMARY_MODEL):
-            yield event
-    except Exception as e:
-        if _is_retryable_gemini_error(e) and not analysis_parts:
-            log.warning("Primary stream failed before first chunk, retrying with %s: %s", _FALLBACK_MODEL, e)
-            analysis_parts.clear()
-            state["json_raw"] = ""
-            try:
-                async for event in _run_stream(_FALLBACK_MODEL):
-                    yield event
-            except Exception as e2:
-                log.error("Fallback stream also failed: %s", e2)
-                yield "event: error\ndata: Erro ao gerar análise.\n\n"
-                return
-        else:
-            log.error("Stream error (non-retryable or mid-stream): %s", e)
-            yield "event: error\ndata: Erro ao gerar análise. Tente novamente.\n\n"
+        if not data:
+            yield "event: error\ndata: Stream expirado ou não encontrado.\n\n"
             return
 
-    analysis_text = "".join(analysis_parts).strip()
-    json_raw = state["json_raw"]
+        data["_claimed"] = True
 
-    # Graceful fallback: if separator was never emitted, treat full response as legacy JSON
-    if not json_raw and analysis_text:
-        log.warning("Separator not found in stream for app_id=%s; attempting full-text JSON parse", data["app_id"])
-        analysis = parse_ai_json_response(analysis_text)
-    else:
-        analysis = _parse_streaming_response(json_raw, analysis_text)
+        analysis_parts: list[str] = []
+        state = {"json_raw": ""}
 
-    if not analysis:
-        yield "event: error\ndata: Erro ao processar resposta da IA. Tente novamente.\n\n"
-        return
+        async def _run_stream(model: str) -> AsyncGenerator[str, None]:
+            """Inner generator: streams one model, yields SSE chunk events, populates state."""
+            pre_buf = ""
+            sep_found = False
+            jbuf = ""
 
-    game_data = GameData(
-        app_id=data["app_id"],
-        title=data["title"],
-        price=data["price_brl"],
-        discount=data["discount"],
-        original_price=data["original_price"],
-        lowest_price=data["lowest_price"],
-        image_url=data["image_url"],
-        steam_url=data["steam_url"],
-        review_score=data["review_score"],
-        analysis=analysis,
-    )
-    game_cache[data["app_id"]] = game_data
-    await asyncio.to_thread(_persist_analysis, game_data)
+            try:
+                async for chunk in await client.aio.models.generate_content_stream(
+                    model=model, contents=data["prompt"]
+                ):
+                    text = chunk.text or ""
+                    if sep_found:
+                        jbuf += text
+                    else:
+                        pre_buf += text
+                        if _STREAM_SEPARATOR in pre_buf:
+                            idx = pre_buf.index(_STREAM_SEPARATOR)
+                            remaining = pre_buf[:idx]
+                            jbuf = pre_buf[idx + _SEP_LEN:]
+                            sep_found = True
+                            if remaining:
+                                analysis_parts.append(remaining)
+                                yield f"event: chunk\ndata: {html_mod.escape(remaining)}\n\n"
+                        else:
+                            safe_end = max(0, len(pre_buf) - (_SEP_LEN - 1))
+                            if safe_end > 0:
+                                safe = pre_buf[:safe_end]
+                                pre_buf = pre_buf[safe_end:]
+                                analysis_parts.append(safe)
+                                yield f"event: chunk\ndata: {html_mod.escape(safe)}\n\n"
+            finally:
+                if not sep_found and pre_buf:
+                    analysis_parts.append(pre_buf)
+                    yield f"event: chunk\ndata: {html_mod.escape(pre_buf)}\n\n"
+                state["json_raw"] = jbuf
 
-    verdict_html = render_verdict_block(game_data, data["app_id"]).replace("\n", " ")
-    yield f"event: complete\ndata: {verdict_html}\n\n"
-    log.info("Stream complete for app_id=%s", data["app_id"])
+        # Try primary model; fall back on retryable errors before any text is sent
+        try:
+            async for event in _run_stream(_PRIMARY_MODEL):
+                yield event
+        except Exception as e:
+            if _is_retryable_gemini_error(e) and not analysis_parts:
+                log.warning("Primary stream failed before first chunk, retrying with %s: %s", _FALLBACK_MODEL, e)
+                analysis_parts.clear()
+                state["json_raw"] = ""
+                try:
+                    async for event in _run_stream(_FALLBACK_MODEL):
+                        yield event
+                except Exception as e2:
+                    log.error("Fallback stream also failed: %s", e2)
+                    yield "event: error\ndata: Erro ao gerar análise.\n\n"
+                    return
+            else:
+                log.error("Stream error (non-retryable or mid-stream): %s", e)
+                yield "event: error\ndata: Erro ao gerar análise. Tente novamente.\n\n"
+                return
+
+        analysis_text = "".join(analysis_parts).strip()
+        json_raw = state["json_raw"]
+
+        # Graceful fallback: if separator was never emitted, treat full response as legacy JSON
+        if not json_raw and analysis_text:
+            log.warning("Separator not found in stream for app_id=%s; attempting full-text JSON parse", data["app_id"])
+            analysis = parse_ai_json_response(analysis_text)
+        else:
+            analysis = _parse_streaming_response(json_raw, analysis_text)
+
+        if not analysis:
+            yield "event: error\ndata: Erro ao processar resposta da IA. Tente novamente.\n\n"
+            return
+
+        game_data = GameData(
+            app_id=data["app_id"],
+            title=data["title"],
+            sub=data["sub"],
+            price=data["price_brl"],
+            discount=data["discount"],
+            original_price=data["original_price"],
+            lowest_price=data["lowest_price"],
+            image_url=data["image_url"],
+            steam_url=data["steam_url"],
+            review_score=data["review_score"],
+            analysis=analysis,
+        )
+        game_cache[data["app_id"]] = game_data
+        await asyncio.to_thread(_persist_analysis, game_data)
+
+        verdict_html = render_verdict_block(game_data, data["app_id"], stream_id).replace("\n", " ")
+        yield f"event: complete\ndata: {verdict_html}\n\n"
+        log.info("Stream complete for app_id=%s", data["app_id"])
+    finally:
+        _pending_streams.pop(stream_id, None)
+        _consumed_streams[stream_id] = True
 
 
 def _persist_analysis(game_data) -> None:

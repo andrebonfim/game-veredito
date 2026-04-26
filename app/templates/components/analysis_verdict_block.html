@@ -4,6 +4,7 @@
   - OOB swap 1 (outerHTML on #art-chip-{app_id}):     status chip → "análise concluída"
   - OOB swap 2 (outerHTML on #verdict-area-{app_id}): verdict pill
   - OOB swap 3 (outerHTML on #points-area-{app_id}):  pros / cons / perf_bars
+  - OOB swap 4 (outerHTML on #sse-{stream_id}):       kills SSE container → stops EventSource reconnect
 #}
 
 {% set vmap = {
@@ -14,6 +15,22 @@
 {% set v = vmap.get(game.analysis.verdict_color, vmap['yellow']) %}
 
 <div></div>
+
+{% if stream_id %}
+<script>
+(function(){
+  var el = document.getElementById('sse-{{ stream_id }}');
+  if (!el) return;
+  // htmx 1.9.x stores EventSource via getInternalData(el).sseEventSource
+  try {
+    var source = htmx._('getInternalData')(el).sseEventSource;
+    if (source) source.close();
+  } catch(e) {}
+  el.removeAttribute('sse-connect');
+  el.removeAttribute('hx-ext');
+})();
+</script>
+{% endif %}
 
 <div hx-swap-oob="outerHTML:#art-chip-{{ app_id }}">
   <div class="art-chip"><span class="d"></span> análise concluída</div>

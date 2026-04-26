@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from app.components.renderer import render_analysis_card, render_error_simple
@@ -13,6 +13,7 @@ from app.services.game_service import (
     extract_app_id,
     game_cache,
     get_history,
+    is_stream_consumed,
     prepare_analysis_stream,
     stream_game_analysis,
 )
@@ -123,6 +124,12 @@ async def analyze_game_endpoint(request: Request, game_url: str = Form(...)):
 
 @router.get("/api/stream/{stream_id}")
 async def stream_endpoint(stream_id: str):
+    # EventSource auto-reconnects after the server closes the stream. Per the
+    # HTML spec, HTTP 204 tells the browser to stop reconnecting permanently —
+    # without this the reconnect would land here, find no pending data, and
+    # surface "Stream expirado ou não encontrado" to the user.
+    if is_stream_consumed(stream_id):
+        return Response(status_code=204)
     return StreamingResponse(
         stream_game_analysis(stream_id),
         media_type="text/event-stream",

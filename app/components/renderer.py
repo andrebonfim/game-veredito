@@ -28,9 +28,9 @@ def render_card_skeleton(partial: dict, stream_id: str) -> str:
     return template.render(game=partial, stream_id=stream_id)
 
 
-def render_verdict_block(game_data: GameData, app_id: str) -> str:
+def render_verdict_block(game_data: GameData, app_id: str, stream_id: str = "") -> str:
     template = jinja_env.get_template("components/analysis_verdict_block.html")
-    return template.render(game=game_data.model_dump(mode="json"), app_id=app_id)
+    return template.render(game=game_data.model_dump(mode="json"), app_id=app_id, stream_id=stream_id)
 
 
 def render_error_simple(error_type: str, message: str, details: str = None) -> str:

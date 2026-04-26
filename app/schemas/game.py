@@ -93,6 +93,7 @@ class GameAnalysis(BaseModel):
 class GameData(BaseModel):
     app_id: str
     title: str
+    sub: Optional[str] = Field(default=None, description="Genre/tag subtitle, e.g. 'Ação · RPG · Singleplayer'")
     price: str
     discount: int = Field(default=0, description="Discount percentage, e.g. 50 for -50%")
     original_price: Optional[str] = Field(default=None, description="Full price before discount, e.g. 'R$ 199,90'")
